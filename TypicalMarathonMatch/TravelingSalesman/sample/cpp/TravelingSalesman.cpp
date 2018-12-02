@@ -44,7 +44,11 @@ class RandGen {
 public:
 	RandGen() { InitRand(); }
 	long long getrand() { return myrand(); }
+	double getrandDouble() { // [0,1)
+		return (myrand()) * (1.0 / LLONG_MAX);
+	}
 };
+
 class TimeChecker {
 	clock_t TimeStart;
 	clock_t TimeEnd;
@@ -57,7 +61,12 @@ public:
 	bool ScheduleOK() {
 		return clock() < TimeEnd;
 	}
+	clock_t begin() { return TimeStart; }
+	clock_t end() { return TimeEnd; }
+	clock_t now() { return clock(); }
 };
+
+
 
 // 始点から1周するオーソドックスなTSP
 // 焼きなまし編
@@ -76,6 +85,7 @@ class TSP_Solver {
 	dataType Score;
 	RandGen Randdevice;
 	TimeChecker Timechecker;
+	const double Dt;
 	// 関数
 	indexType indexAdjust(indexType a) { return (a) % DataN; }
 	dataType pow2(dataType x) { return x * x; }
@@ -90,9 +100,13 @@ class TSP_Solver {
 
 	dataType initial_solution() {
 		dataType score = 0;
+		std::random_device rdev{}; //乱数生成器を生成
+		std::mt19937 mt(rdev()); //メルセンヌ・ツイスタ生成器を使用
+
 		FOR(i, 0, DataN) {
 			Path.push_back(i);
 		}
+		shuffle(ALL(Path), mt);
 		FOR(i, 0, DataN) { // 1周するため
 			score += dist(i, i + 1);
 		}
@@ -129,7 +143,6 @@ class TSP_Solver {
 	}
 	// 変化点が与えられているのでスコアの変更とパスの変更をする
 
-	int cnt = 0;
 	void swapExecute() {
 		Score += swap2EdgeScoreDiff(0);
 		// reverse(TODO: bst)
@@ -139,12 +152,28 @@ class TSP_Solver {
 		for (indexType i = Anx, j = B; i < j; i++, j--) {
 			swap(Path[i], Path[j]);
 		}
-		cnt++;
+	}
+
+	// 焼きなまし
+	// 
+	bool simulatedAnnealing(double diff) {
+		if (diff <= 0)return 1;
+		const long long t = Timechecker.now();
+		const long long T = Timechecker.begin() + CLOCKS_PER_SEC * Dt;
+		if (t > T)return 0;
+		double startTemp = 100;
+		double endTemp = 1;
+		double temp = startTemp + (endTemp - startTemp) * t / T;
+		const long long R = 10000;
+		double probability = exp((-diff) / temp);
+		double randd = ((double)(Randdevice.getrand() % R) / R);
+		bool FORCE_NEXT = probability > randd;
+		return FORCE_NEXT;
 	}
 
 public:
-	TSP_Solver(const vector<dataType>& posx, const vector<dataType>& posy, const double T)
-		: posX(posx), posY(posy), DataN(SZ(posX)), Randdevice(RandGen()), Timechecker(T) {}
+	TSP_Solver(const vector<dataType>& posx, const vector<dataType>& posy, const double T, const double ANT)
+		: posX(posx), posY(posy), DataN(SZ(posX)), Randdevice(RandGen()), Timechecker(T), Dt(ANT) {}
 
 	vector<indexType> solve() {
 		Score = initial_solution();
@@ -152,21 +181,36 @@ public:
 		// 時間内までやる
 		// path の 2本を交換することからはじめる
 		// 交換して良くなるなら遷移
-		Timechecker = TimeChecker(Timechecker.T);
-		while (Timechecker.ScheduleOK()) {
-			dataType scoreDiff = swap2EdgeScoreDiff();
-			if (scoreDiff < 0) { // 適宜かえる
-				swapExecute();
+		TimeChecker	smchecker(Dt);
+		while (smchecker.ScheduleOK()) {
+			FOR(_, 0, 1000) {
+				dataType scoreDiff = swap2EdgeScoreDiff();
+				bool forcenext = simulatedAnnealing(scoreDiff);
+				bool accept = (scoreDiff < 0 || forcenext);
+				if (accept) { // 適宜かえる
+					swapExecute();
+				}
 			}
 		}
-		DD(de("res", Score))
-			return Path;
+		Timechecker = TimeChecker(Timechecker.T);
+		while (Timechecker.ScheduleOK()) {
+			FOR(_, 0, 1000) {
+				dataType scoreDiff = swap2EdgeScoreDiff();
+				bool accept = (scoreDiff < 0);
+				if (accept) { // 適宜かえる
+					swapExecute();
+				}
+			}
+		}
+		DD(de("res", Score));
+		return Path;
+	}
+	dataType getFinalScore() {
+		solve();
+		return Score;
 	}
 
-
 };
-
-
 
 
 
@@ -179,7 +223,7 @@ int main() {
 	for (int i = 0; i < N; i++) {
 		cin >> posX[i] >> posY[i];
 	}
-	TSP_Solver sol(posX, posY, 300);
+	TSP_Solver sol(posX, posY, 100, 10);
 	vector<int> order = sol.solve();
 
 	for (int i : order) {
